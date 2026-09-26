@@ -1,0 +1,6 @@
+{
+  "name": "Mausam - IMD MoES Weather Dashboard",
+  "description": "Personalized meteorological dashboard for India Meteorological Department featuring 8 distinct personas, dynamic card prioritization, live and scenario weather feeds, and AI-powered briefing banners.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
