@@ -31,7 +31,7 @@ export const AqiPollenWidget: React.FC<AqiPollenWidgetProps> = ({ weather }) => 
               <h3 className="text-sm font-bold text-slate-900 font-display break-words">
                 National Air Quality & Pollen
               </h3>
-              <p className="text-[11px] text-slate-500 break-words mt-0.5">CPCB Biometeorology & Respiratory Health</p>
+              <p className="text-[11px] text-slate-500 break-words mt-0.5">Open-Meteo pollutants • CPCB / NAQI scale</p>
             </div>
           </div>
           <span className={`text-xs font-bold px-2.5 py-1 rounded-full border shrink-0 ${aqiColors.bgLight} ${aqiColors.text} ${aqiColors.border}`}>
@@ -44,7 +44,7 @@ export const AqiPollenWidget: React.FC<AqiPollenWidgetProps> = ({ weather }) => 
           <div className="flex items-baseline justify-between gap-2 flex-wrap mb-1.5">
             <div>
               <span className="text-3xl font-black font-display text-slate-900">{weather.aqi}</span>
-              <span className="text-xs text-slate-500 font-medium ml-1.5">AQI Index (CPCB)</span>
+              <span className="text-xs text-slate-500 font-medium ml-1.5">AQI (CPCB scale estimate)</span>
             </div>
             <span className="text-xs font-semibold text-slate-600 break-words">
               PM2.5 Dominant: {weather.pm25} µg/m³
@@ -87,12 +87,12 @@ export const AqiPollenWidget: React.FC<AqiPollenWidgetProps> = ({ weather }) => 
           <div className="bg-white rounded-lg p-2 border border-slate-200/80 text-center shadow-2xs">
             <div className="text-[10px] text-slate-400 font-semibold">NO₂</div>
             <div className="text-xs font-bold text-slate-800">{weather.no2}</div>
-            <div className="text-[9px] text-slate-500">ppb</div>
+              <div className="text-[9px] text-slate-500">µg/m³</div>
           </div>
           <div className="bg-white rounded-lg p-2 border border-slate-200/80 text-center shadow-2xs">
             <div className="text-[10px] text-slate-400 font-semibold">SO₂</div>
             <div className="text-xs font-bold text-slate-800">{weather.so2}</div>
-            <div className="text-[9px] text-slate-500">ppb</div>
+              <div className="text-[9px] text-slate-500">µg/m³</div>
           </div>
         </div>
 
@@ -105,16 +105,16 @@ export const AqiPollenWidget: React.FC<AqiPollenWidgetProps> = ({ weather }) => 
             <div className="bg-slate-50 rounded-lg p-2 border border-slate-200/60 text-center">
               <div className="text-[10px] text-slate-500">Tree Pollen</div>
               <div className={`text-xs font-bold ${weather.pollenTrees === 'High' ? 'text-red-600' : 'text-slate-800'}`}>
-                {weather.pollenTrees}
+                {weather.pollenTrees === 'Unavailable' ? 'No data' : weather.pollenTrees}
               </div>
             </div>
             <div className="bg-slate-50 rounded-lg p-2 border border-slate-200/60 text-center">
               <div className="text-[10px] text-slate-500">Grass Pollen</div>
-              <div className="text-xs font-bold text-slate-800">{weather.pollenGrass}</div>
+              <div className="text-xs font-bold text-slate-800">{weather.pollenGrass === 'Unavailable' ? 'No data' : weather.pollenGrass}</div>
             </div>
             <div className="bg-slate-50 rounded-lg p-2 border border-slate-200/60 text-center">
               <div className="text-[10px] text-slate-500">Weed Pollen</div>
-              <div className="text-xs font-bold text-slate-800">{weather.pollenWeeds}</div>
+              <div className="text-xs font-bold text-slate-800">{weather.pollenWeeds === 'Unavailable' ? 'No data' : weather.pollenWeeds}</div>
             </div>
           </div>
         </div>

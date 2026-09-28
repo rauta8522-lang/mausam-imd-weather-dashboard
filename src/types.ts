@@ -158,9 +158,9 @@ export interface WeatherData {
   pm10: number;
   no2: number;
   so2: number;
-  pollenTrees: 'Low' | 'Moderate' | 'High' | 'Very High';
-  pollenGrass: 'Low' | 'Moderate' | 'High' | 'Very High';
-  pollenWeeds: 'Low' | 'Moderate' | 'High' | 'Very High';
+  pollenTrees: 'Low' | 'Moderate' | 'High' | 'Very High' | 'Unavailable';
+  pollenGrass: 'Low' | 'Moderate' | 'High' | 'Very High' | 'Unavailable';
+  pollenWeeds: 'Low' | 'Moderate' | 'High' | 'Very High' | 'Unavailable';
   visibility: number; // in km
   visibilityDesc: string;
   soilMoisture: number; // percentage

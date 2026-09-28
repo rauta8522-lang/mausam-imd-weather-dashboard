@@ -18,6 +18,7 @@ export const CitySelectModal: React.FC<CitySelectModalProps> = ({
 }) => {
   const [search, setSearch] = useState('');
   const [customError, setCustomError] = useState('');
+  const [customLoading, setCustomLoading] = useState(false);
 
   if (!isOpen) return null;
 
@@ -34,9 +35,10 @@ export const CitySelectModal: React.FC<CitySelectModalProps> = ({
     onClose();
   };
 
-  const handleCustomCitySubmit = (e: React.FormEvent) => {
+  const handleCustomCitySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!search.trim()) return;
+    setCustomError('');
 
     // Check if city exists in list
     const found = POPULAR_CITIES.find(
@@ -47,18 +49,31 @@ export const CitySelectModal: React.FC<CitySelectModalProps> = ({
       return;
     }
 
-    // Create a custom Indian city entry
-    const customCity: City = {
-      id: `custom_${Date.now()}`,
-      name: search.trim(),
-      hindiName: search.trim(),
-      state: 'India Meteorological Network',
-      lat: 20.5937,
-      lon: 78.9629,
-      zone: 'Regional Division',
-      coastal: false,
-    };
-    handleSelect(customCity);
+    setCustomLoading(true);
+    try {
+      const params = new URLSearchParams({ name: search.trim(), count: '1', language: 'en', format: 'json' });
+      const response = await fetch(`https://geocoding-api.open-meteo.com/v1/search?${params}`);
+      if (!response.ok) throw new Error(`Geocoding failed: ${response.status}`);
+      const result = (await response.json()).results?.[0];
+      if (!result) {
+        setCustomError('No matching location found. Try a city or district name.');
+        return;
+      }
+      handleSelect({
+        id: `geocoded_${result.id}`,
+        name: result.name,
+        hindiName: result.name,
+        state: result.admin1 || result.country || 'Geocoded location',
+        lat: result.latitude,
+        lon: result.longitude,
+        zone: result.admin1 || result.country || 'Open-Meteo coordinates',
+        coastal: false,
+      });
+    } catch (error) {
+      setCustomError(error instanceof Error ? error.message : 'Unable to geocode this location.');
+    } finally {
+      setCustomLoading(false);
+    }
   };
 
   return (
@@ -92,12 +107,16 @@ export const CitySelectModal: React.FC<CitySelectModalProps> = ({
             <input
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setCustomError('');
+              }}
               placeholder="Search by city (e.g., Delhi, Mumbai, Shimla, Kochi)..."
               className="w-full bg-white text-slate-900 text-sm pl-9 pr-4 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
               autoFocus
             />
           </form>
+          {customError && <p className="mt-2 text-xs text-red-600">{customError}</p>}
         </div>
 
         {/* Popular Cities Grid */}
@@ -152,7 +171,9 @@ export const CitySelectModal: React.FC<CitySelectModalProps> = ({
           ) : (
             <div className="text-center py-6 text-slate-500 text-xs">
               <p>No exact preset match for "{search}".</p>
-              <p className="mt-1 font-medium text-sky-600">Press Enter to search station coordinates.</p>
+              <p className="mt-1 font-medium text-sky-600">
+                {customLoading ? 'Finding coordinates...' : 'Press Enter to geocode this location.'}
+              </p>
             </div>
           )}
         </div>

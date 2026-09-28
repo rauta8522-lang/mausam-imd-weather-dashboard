@@ -61,30 +61,59 @@ export const SCENARIO_LABELS: Record<WeatherScenario, { name: string; alertLevel
 
 export async function fetchWeatherData(
   city: City,
-  scenario: WeatherScenario = 'current_normal'
+  scenario: WeatherScenario = 'live'
 ): Promise<WeatherData> {
-  if (scenario === 'live') {
-    try {
-      return await fetchLiveOpenMeteoWeather(city);
-    } catch (err) {
-      console.warn('Failed to fetch live weather, falling back to realistic normal data', err);
-      return generateScenarioWeather(city, 'current_normal');
-    }
-  }
-
-  return generateScenarioWeather(city, scenario);
+  return scenario === 'live'
+    ? fetchLiveOpenMeteoWeather(city)
+    : generateScenarioWeather(city, scenario);
 }
 
 async function fetchLiveOpenMeteoWeather(city: City): Promise<WeatherData> {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure&hourly=temperature_2m,precipitation_probability,precipitation,wind_speed_10m,uv_index,relative_humidity_2m,visibility&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunrise,sunset&timezone=Asia%2FKolkata`;
-
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Weather API error: ${res.status}`);
-  const data = await res.json();
+  const params = new URLSearchParams({
+    latitude: String(city.lat),
+    longitude: String(city.lon),
+    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,surface_pressure',
+    hourly: 'temperature_2m,precipitation_probability,precipitation,wind_speed_10m,uv_index,relative_humidity_2m,visibility',
+    daily: 'weather_code,temperature_2m_max,temperature_2m_min,uv_index_max,precipitation_probability_max,precipitation_sum,sunrise,sunset',
+    timezone: 'auto',
+    forecast_days: '7',
+  });
+  const airParams = new URLSearchParams({
+    latitude: String(city.lat),
+    longitude: String(city.lon),
+    current: 'pm10,pm2_5,nitrogen_dioxide,sulphur_dioxide',
+    timezone: 'auto',
+  });
+  const [weatherResponse, airResponse] = await Promise.all([
+    fetch(`https://api.open-meteo.com/v1/forecast?${params}`),
+    fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?${airParams}`),
+  ]);
+  if (!weatherResponse.ok) throw new Error(`Weather API error: ${weatherResponse.status}`);
+  if (!airResponse.ok) throw new Error(`Air quality API error: ${airResponse.status}`);
+  const [data, airData] = await Promise.all([weatherResponse.json(), airResponse.json()]);
 
   const current = data.current;
   const daily = data.daily;
   const hourly = data.hourly;
+  const air = airData.current;
+  if (!current || !daily || !hourly || !air) throw new Error('Open-Meteo returned an incomplete response');
+  const requiredMeasurements = [
+    current.temperature_2m,
+    current.relative_humidity_2m,
+    current.apparent_temperature,
+    current.precipitation,
+    current.weather_code,
+    current.wind_speed_10m,
+    current.wind_direction_10m,
+    current.surface_pressure,
+    air.pm10,
+    air.pm2_5,
+    air.nitrogen_dioxide,
+    air.sulphur_dioxide,
+  ];
+  if (!requiredMeasurements.every(Number.isFinite)) {
+    throw new Error('Open-Meteo returned missing current weather or air-quality measurements');
+  }
 
   const temp = Math.round(current.temperature_2m);
   const feelsLike = Math.round(current.apparent_temperature);
@@ -94,63 +123,61 @@ async function fetchLiveOpenMeteoWeather(city: City): Promise<WeatherData> {
   const humidity = Math.round(current.relative_humidity_2m);
   const pressure = Math.round(current.surface_pressure);
   const windDirection = getWindDirectionText(current.wind_direction_10m);
-  const rainProb = daily.precipitation_probability_max?.[0] ?? Math.min(100, Math.round((current.precipitation || 0) * 20));
-  const rainMm = current.precipitation || 0;
+  const rainMm = Number(current.precipitation);
 
-  // Derive AQI and visibility
-  const baseAqi = city.id === 'delhi' ? 185 : city.id === 'mumbai' ? 95 : 75;
-  const aqi = baseAqi + Math.floor(Math.random() * 20) - 10;
+  const pm25 = Math.round(air.pm2_5);
+  const pm10 = Math.round(air.pm10);
+  const no2 = Math.round(air.nitrogen_dioxide);
+  const so2 = Math.round(air.sulphur_dioxide);
+  const aqi = calculateCpcbAqi(pm25, pm10, no2, so2);
   const aqiCategory = getAqiCategory(aqi);
 
-  // Hourly mapping (next 12 hours)
-  const currentHour = new Date().getHours();
+  // Match the hourly forecast to the API's local timestamp, not the browser timezone.
+  const currentHour = Math.max(0, hourly.time.findIndex(
+    (time: string) => time.slice(0, 13) === current.time.slice(0, 13)
+  ));
+  const rainProb = Math.round(hourly.precipitation_probability?.[currentHour] ?? daily.precipitation_probability_max?.[0] ?? 0);
+  const visibilityMeters = hourly.visibility?.[currentHour];
+  const visibility = Number.isFinite(visibilityMeters) ? Number((visibilityMeters / 1000).toFixed(1)) : 0;
   const hourlyData = [];
   for (let i = 0; i < 12; i++) {
-    const idx = (currentHour + i) % 24;
-    const hTime = `${(currentHour + i) % 24}:00`;
+    const idx = currentHour + i;
     hourlyData.push({
-      time: i === 0 ? 'Now' : hTime,
+      time: i === 0 ? 'Now' : hourly.time?.[idx]?.slice(11, 16) ?? '',
       temp: Math.round(hourly.temperature_2m?.[idx] ?? temp),
-      feelsLike: Math.round((hourly.temperature_2m?.[idx] ?? temp) + 1),
+      feelsLike: Math.round(hourly.temperature_2m?.[idx] ?? feelsLike),
       pop: Math.round(hourly.precipitation_probability?.[idx] ?? rainProb),
       rainMm: +(hourly.precipitation?.[idx] ?? 0).toFixed(1),
       windSpeed: Math.round(hourly.wind_speed_10m?.[idx] ?? windSpeed),
       humidity: Math.round(hourly.relative_humidity_2m?.[idx] ?? humidity),
       uvIndex: Math.round(hourly.uv_index?.[idx] ?? 4),
       condition: getWeatherCodeDescription(weatherCode),
-      conditionCode: 'partly_cloudy',
+      conditionCode: String(weatherCode),
     });
   }
 
-  // Daily mapping (next 7 days)
-  const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const todayIndex = new Date().getDay();
-  const dailyData = [];
-  for (let i = 0; i < 7; i++) {
-    const dayName = i === 0 ? 'Today' : daysOfWeek[(todayIndex + i) % 7];
-    const maxT = Math.round(daily.temperature_2m_max?.[i] ?? temp + 2);
-    const minT = Math.round(daily.temperature_2m_min?.[i] ?? temp - 6);
-    const dRain = Math.round(daily.precipitation_probability_max?.[i] ?? 20);
-    const dCode = daily.weather_code?.[i] ?? weatherCode;
-    dailyData.push({
-      day: dayName,
-      date: `Sep ${21 + i}`,
-      maxTemp: maxT,
-      minTemp: minT,
-      rainProb: dRain,
-      rainMm: +(daily.precipitation_sum?.[i] ?? 1.2).toFixed(1),
-      condition: getWeatherCodeDescription(dCode),
-      conditionCode: 'cloudy',
-      alertLevel: (dRain > 70 ? 'orange' : dRain > 40 ? 'yellow' : 'green') as AlertColor,
-    });
-  }
+  const dailyData = (daily.time as string[]).map((date, index) => {
+    const probability = Math.round(daily.precipitation_probability_max?.[index] ?? 0);
+    const dailyCode = daily.weather_code?.[index] ?? weatherCode;
+    return {
+      day: index === 0 ? 'Today' : new Date(`${date}T12:00:00`).toLocaleDateString('en-IN', { weekday: 'short' }),
+      date: new Date(`${date}T12:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }),
+      maxTemp: Math.round(daily.temperature_2m_max[index]),
+      minTemp: Math.round(daily.temperature_2m_min[index]),
+      rainProb: probability,
+      rainMm: Number((daily.precipitation_sum?.[index] ?? 0).toFixed(1)),
+      condition: getWeatherCodeDescription(dailyCode),
+      conditionCode: String(dailyCode),
+      alertLevel: (probability > 70 ? 'orange' : probability > 40 ? 'yellow' : 'green') as AlertColor,
+    };
+  });
 
-  const uvIndex = Math.max(1, Math.min(11, Math.round(hourly.uv_index?.[currentHour] ?? 6)));
+  const uvIndex = Math.round(daily.uv_index_max?.[0] ?? 0);
   const alertLevel: AlertColor = rainProb > 75 ? 'orange' : rainProb > 45 ? 'yellow' : 'green';
 
   return {
     city,
-    updatedAt: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) + ' IST (Live Feed)',
+    updatedAt: `${current.time} ${data.timezone_abbreviation} (Open-Meteo)`,
     temp,
     feelsLike,
     tempMin: Math.round(daily.temperature_2m_min?.[0] ?? temp - 5),
@@ -161,20 +188,20 @@ async function fetchLiveOpenMeteoWeather(city: City): Promise<WeatherData> {
     pressure,
     windSpeed,
     windDirection,
-    windGusts: windSpeed + 8,
+    windGusts: Math.round(current.wind_gusts_10m ?? windSpeed),
     uvIndex,
     uvCategory: getUvCategory(uvIndex),
     aqi,
     aqiCategory,
-    pm25: Math.round(aqi * 0.62),
-    pm10: Math.round(aqi * 1.15),
-    no2: 24,
-    so2: 12,
-    pollenTrees: aqi > 150 ? 'High' : 'Moderate',
-    pollenGrass: 'Moderate',
-    pollenWeeds: 'Low',
-    visibility: 7.5,
-    visibilityDesc: 'Good - Normal Driving Conditions',
+    pm25,
+    pm10,
+    no2,
+    so2,
+    pollenTrees: 'Unavailable',
+    pollenGrass: 'Unavailable',
+    pollenWeeds: 'Unavailable',
+    visibility,
+    visibilityDesc: visibility < 1 ? 'Very poor' : visibility < 4 ? 'Reduced' : 'Good',
     soilMoisture: city.coastal ? 62 : 44,
     soilTemp: temp - 2,
     rainProb,
@@ -185,8 +212,8 @@ async function fetchLiveOpenMeteoWeather(city: City): Promise<WeatherData> {
     tideNextHigh: '13:45 IST (1.8m)',
     tideNextLow: '19:30 IST (0.5m)',
     ripCurrentRisk: windSpeed > 30 ? 'High' : 'Moderate',
-    sunrise: daily.sunrise?.[0]?.split('T')[1] || '06:12',
-    sunset: daily.sunset?.[0]?.split('T')[1] || '18:24',
+    sunrise: daily.sunrise?.[0]?.split('T')[1] || '--:--',
+    sunset: daily.sunset?.[0]?.split('T')[1] || '--:--',
     goldenHourMorning: '05:45 - 06:45 IST',
     goldenHourEvening: '17:35 - 18:35 IST',
     alertLevel,
@@ -524,6 +551,22 @@ function getAqiCategory(aqi: number): string {
   if (aqi <= 300) return 'Poor';
   if (aqi <= 400) return 'Very Poor';
   return 'Severe';
+}
+
+function calculateCpcbAqi(pm25: number, pm10: number, no2: number, so2: number): number {
+  const subIndices = [
+    [pm25, [[0, 30, 0, 50], [31, 60, 51, 100], [61, 90, 101, 200], [91, 120, 201, 300], [121, 250, 301, 400], [251, 500, 401, 500]]],
+    [pm10, [[0, 50, 0, 50], [51, 100, 51, 100], [101, 250, 101, 200], [251, 350, 201, 300], [351, 430, 301, 400], [431, 600, 401, 500]]],
+    [no2, [[0, 40, 0, 50], [41, 80, 51, 100], [81, 180, 101, 200], [181, 280, 201, 300], [281, 400, 301, 400], [401, 1000, 401, 500]]],
+    [so2, [[0, 40, 0, 50], [41, 80, 51, 100], [81, 380, 101, 200], [381, 800, 201, 300], [801, 1600, 301, 400], [1601, 2000, 401, 500]]],
+  ] as const;
+
+  return Math.min(500, Math.max(...subIndices.map(([concentration, bands]) => {
+    const band = [...bands].reverse().find(([low]) => concentration >= low);
+    if (!band) return 0;
+    const [low, high, aqiLow, aqiHigh] = band;
+    return Math.round(((aqiHigh - aqiLow) / (high - low)) * (concentration - low) + aqiLow);
+  })));
 }
 
 function getUvCategory(uv: number): string {

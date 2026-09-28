@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Sparkles,
   ArrowUpDown,
@@ -86,14 +86,14 @@ const WIDGET_TITLES: Record<WidgetId, string> = {
 };
 
 const THEME_STORAGE_KEY = 'mausam_theme_mode';
-const WEATHER_CACHE_KEY_PREFIX = 'mausam_cached_weather_';
+const WEATHER_CACHE_KEY_PREFIX = 'mausam_cached_weather_v2_';
 const BRIEFING_CACHE_KEY_PREFIX = 'mausam_cached_briefing_';
 
 export default function App() {
   const [activePersonaId, setActivePersonaId] = useState<PersonaId>('health');
   const [secondaryPersonaId, setSecondaryPersonaId] = useState<PersonaId | null>(null);
   const [selectedCity, setSelectedCity] = useState<City>(POPULAR_CITIES[0]); // New Delhi
-  const [scenario, setScenario] = useState<WeatherScenario>('green_normal');
+  const [scenario, setScenario] = useState<WeatherScenario>('live');
   const [language, setLanguage] = useState<LanguageCode>('en');
   const [isCityModalOpen, setIsCityModalOpen] = useState(false);
   const [viewFilter, setViewFilter] = useState<'focused' | 'all'>('focused');
@@ -115,6 +115,9 @@ export default function App() {
 
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [weatherLoading, setWeatherLoading] = useState<boolean>(true);
+  const [weatherError, setWeatherError] = useState<string | null>(null);
+  const weatherRequestId = useRef(0);
+  const briefingRequestId = useRef(0);
 
   const [briefing, setBriefing] = useState<AIBriefing | null>(null);
   const [briefingLoading, setBriefingLoading] = useState<boolean>(false);
@@ -129,6 +132,15 @@ export default function App() {
   const secondaryPersona = secondaryPersonaId
     ? PERSONAS.find((p) => p.id === secondaryPersonaId) || null
     : null;
+
+  const handleSelectCity = (city: City) => {
+    setSelectedCity({ ...city });
+    setScenario('live');
+    setWeather(null);
+    setBriefing(null);
+    briefingRequestId.current += 1;
+    setBriefingLoading(false);
+  };
 
   // Sync theme changes to documentElement
   useEffect(() => {
@@ -163,11 +175,16 @@ export default function App() {
 
   // Load weather data with robust offline fallback caching
   const loadWeather = useCallback(async () => {
+    const requestId = ++weatherRequestId.current;
     setWeatherLoading(true);
+    setWeatherError(null);
+    setWeather(null);
+    setIsUsingCachedData(false);
     const cacheKey = `${WEATHER_CACHE_KEY_PREFIX}${selectedCity.id}_${scenario}`;
 
     try {
       const data = await fetchWeatherData(selectedCity, scenario);
+      if (requestId !== weatherRequestId.current) return;
       setWeather(data);
       setIsUsingCachedData(false);
 
@@ -191,14 +208,16 @@ export default function App() {
         console.warn('Could not cache weather payload to localStorage:', storageErr);
       }
     } catch (err) {
+      if (requestId !== weatherRequestId.current) return;
       console.warn('Network / API error fetching weather, checking cache:', err);
-      // Attempt to load from offline cache
       try {
-        const cachedRaw =
-          localStorage.getItem(cacheKey) || localStorage.getItem('mausam_cached_weather_latest');
+        const cachedRaw = localStorage.getItem(cacheKey);
         if (cachedRaw) {
           const parsed = JSON.parse(cachedRaw);
-          if (parsed && parsed.data) {
+          if (
+            parsed?.data?.city?.lat === selectedCity.lat &&
+            parsed?.data?.city?.lon === selectedCity.lon
+          ) {
             setWeather(parsed.data);
             setIsUsingCachedData(true);
             return;
@@ -207,14 +226,16 @@ export default function App() {
       } catch (cacheErr) {
         console.error('Failed reading weather cache:', cacheErr);
       }
+      setWeatherError(err instanceof Error ? err.message : 'Unable to load weather telemetry.');
     } finally {
-      setWeatherLoading(false);
+      if (requestId === weatherRequestId.current) setWeatherLoading(false);
     }
   }, [selectedCity, scenario]);
 
   // Load AI briefing from backend with local cache fallback
   const loadAIBriefing = useCallback(
     async (currentWeather: WeatherData, lang: LanguageCode = language) => {
+      const requestId = ++briefingRequestId.current;
       setBriefingLoading(true);
       const briefingCacheKey = `${BRIEFING_CACHE_KEY_PREFIX}${selectedCity.id}_${activePersona.id}_${lang}`;
 
@@ -259,6 +280,7 @@ export default function App() {
         }
 
         const data = await response.json();
+        if (requestId !== briefingRequestId.current) return;
         const synthesizedBriefing = {
           ...data.briefing,
           source: data.source || 'gemini-3.8-flash',
@@ -272,6 +294,7 @@ export default function App() {
           // ignore
         }
       } catch (err) {
+        if (requestId !== briefingRequestId.current) return;
         console.warn('Backend briefing error, checking cached briefing or local fallback:', err);
         let cachedBriefing: AIBriefing | null = null;
         try {
@@ -304,7 +327,7 @@ export default function App() {
           });
         }
       } finally {
-        setBriefingLoading(false);
+        if (requestId === briefingRequestId.current) setBriefingLoading(false);
       }
     },
     [activePersona, secondaryPersona, selectedCity, language]
@@ -315,12 +338,12 @@ export default function App() {
     loadWeather();
   }, [loadWeather]);
 
-  // When weather is loaded or personas or language change, update AI briefing
+  // When matching city telemetry, personas, or language changes, update the briefing.
   useEffect(() => {
-    if (weather) {
+    if (weather && weather.city.lat === selectedCity.lat && weather.city.lon === selectedCity.lon) {
       loadAIBriefing(weather, language);
     }
-  }, [activePersonaId, secondaryPersonaId, weather?.updatedAt, scenario, language, loadAIBriefing]);
+  }, [activePersonaId, secondaryPersonaId, weather, selectedCity.lat, selectedCity.lon, scenario, language, loadAIBriefing]);
 
   // Generate automated alerts on meteorological updates or persona switches
   useEffect(() => {
@@ -505,7 +528,7 @@ export default function App() {
       <Header
         currentCity={selectedCity}
         onOpenCityModal={() => setIsCityModalOpen(true)}
-        onSelectCity={setSelectedCity}
+        onSelectCity={handleSelectCity}
         scenario={scenario}
         onSelectScenario={setScenario}
         weather={weather}
@@ -599,6 +622,10 @@ export default function App() {
         {/* Prioritized Smart Cards Grid / Skeleton Loading State */}
         {weatherLoading && !weather ? (
           <DashboardSkeleton />
+        ) : weatherError && !weather ? (
+          <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            Live telemetry unavailable: {weatherError}
+          </div>
         ) : (
           <div className="space-y-6">
             {/* Landlocked Region Safeguard Notice for Coastal / Beach Persona */}
@@ -718,9 +745,8 @@ export default function App() {
 
           <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-500">
             <p>
-              Advisory Disclaimer: Weather forecasts and biometeorological alert
-              levels are generated using IMD Synoptic Models & Open-Meteo
-              meteorological APIs.
+              Telemetry source: IMD Synoptic Models & Open-Meteo WMO Station Telemetry.
+              Air-quality index mapped to CPCB / NAQI Standard Scale from Open-Meteo pollutant concentrations.
             </p>
             <p className="shrink-0">
               Mausam Web Portal • IMD MoES © 2026
@@ -734,7 +760,7 @@ export default function App() {
         isOpen={isCityModalOpen}
         onClose={() => setIsCityModalOpen(false)}
         selectedCity={selectedCity}
-        onSelectCity={(city) => setSelectedCity(city)}
+        onSelectCity={handleSelectCity}
       />
 
       {/* Floating Toast Notifications for Severe & Simulated Alerts */}

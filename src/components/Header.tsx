@@ -87,22 +87,16 @@ export const Header: React.FC<HeaderProps> = ({
       (position) => {
         setGpsLoading(false);
         const { latitude, longitude } = position.coords;
-
-        // Find closest city in POPULAR_CITIES
-        let closest = POPULAR_CITIES[0];
-        let minDistance = Infinity;
-
-        POPULAR_CITIES.forEach((c) => {
-          const dLat = c.lat - latitude;
-          const dLon = c.lon - longitude;
-          const dist = Math.sqrt(dLat * dLat + dLon * dLon);
-          if (dist < minDistance) {
-            minDistance = dist;
-            closest = c;
-          }
+        onSelectCity({
+          id: `gps_${latitude.toFixed(4)}_${longitude.toFixed(4)}`,
+          name: 'GPS Location',
+          hindiName: 'वर्तमान स्थान',
+          state: 'Browser geolocation',
+          lat: latitude,
+          lon: longitude,
+          zone: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
+          coastal: false,
         });
-
-        onSelectCity(closest);
       },
       (error) => {
         setGpsLoading(false);
