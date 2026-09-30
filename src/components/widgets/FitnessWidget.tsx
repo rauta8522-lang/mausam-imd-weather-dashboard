@@ -22,7 +22,7 @@ export const FitnessWidget: React.FC<FitnessWidgetProps> = ({ weather }) => {
       temp: weather.temp - 2,
       status: weather.temp > 34 ? 'Moderate' : 'Good',
       color: 'bg-lime-100 text-lime-800 border-lime-300',
-      recommendation: 'Rising temperature, keep hydration bottle',
+      recommendation: 'hot temprature amit , keep hydration bottle',
     },
     {
       time: '11:00 - 16:00',
